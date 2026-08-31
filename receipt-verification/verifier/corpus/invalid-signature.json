@@ -1,0 +1,6 @@
+{
+  "signature": "UCBv1L5zaMiACAEcq+B4yPGAZ6Qm0xOa7ciOfV+vM97UZoO5BBxQNUGOnfJEtI0seXYi80faqNEsKHz0v0toCg==",
+  "key_id": "corpus_active_v1",
+  "signed_payload": "{\"chain_scope\":\"account:corpus:run:corpus\",\"metadata\":{},\"occurred_at\":\"2026-01-02T03:04:05Z\",\"payload_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"previous_hash\":null,\"receipt_type\":\"tool.succeeded\",\"schema_version\":\"agent_receipt.v1\",\"sequence\":1,\"status\":\"recorded\",\"subject_id\":\"tampered\",\"subject_type\":\"tool_call\"} ",
+  "receipt_hash": "f87fba2ef95497984318839b488283b95f15f55a136ac958914a581f09ce3f36"
+}

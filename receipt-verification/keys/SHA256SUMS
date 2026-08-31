@@ -1,0 +1,5 @@
+# SHA-256 checksums for receipt-verification/keys.
+# Scope: this directory only. Independent of the benchmark release.
+# Verify with: sha256sum -c SHA256SUMS
+00e5d5c260a93d3be25bedae74ca3492dd59fc1bddcd6d8cf9915b8171456c16  README.md
+5caf7d9978f18bf1af720f0c8e1d19aef158b808bfb72eb8fd2c67aa9027d54f  registry.json

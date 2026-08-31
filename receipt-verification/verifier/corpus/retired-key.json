@@ -1,0 +1,6 @@
+{
+  "signature": "8mrW48weYk4L156dYdzimvgQi0sJZIRbVGnd7oqppHz/NnL/bUKqKZtsEsvu3HJuZU5X3hS1K6Fs4EcwyAy/BA==",
+  "key_id": "corpus_retired_v1",
+  "signed_payload": "{\"chain_scope\":\"account:corpus:run:corpus\",\"metadata\":{},\"occurred_at\":\"2026-01-02T03:04:05Z\",\"payload_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"previous_hash\":null,\"receipt_type\":\"tool.succeeded\",\"schema_version\":\"agent_receipt.v1\",\"sequence\":1,\"status\":\"recorded\",\"subject_id\":\"retired\",\"subject_type\":\"tool_call\"}",
+  "receipt_hash": "a8fdfaaae9db55466126b20e087bc3fb66e89558ac184fa8aabe1893d325cdd0"
+}

@@ -1,0 +1,6 @@
+{
+  "signature": "zYF8xkvEN3ScKui2XzDXvsOYTreynKjjS6kzMIeTbdQkqfy8OEtg1lY1+ugOLoJwX9jLH5IKKy1aJ0JDRS1NBg==",
+  "key_id": "example_ed25519_v0",
+  "signed_payload": "{\"chain_scope\":\"account:corpus:run:corpus\",\"metadata\":{},\"occurred_at\":\"2026-01-02T03:04:05Z\",\"payload_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"previous_hash\":null,\"receipt_type\":\"tool.succeeded\",\"schema_version\":\"agent_receipt.v1\",\"sequence\":1,\"status\":\"recorded\",\"subject_id\":\"example\",\"subject_type\":\"tool_call\"}",
+  "receipt_hash": "1d22438579e2c92f8ac30a768f6640c936eaa07c9dc414eb8f78c552a4d42580"
+}

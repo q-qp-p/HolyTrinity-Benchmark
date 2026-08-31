@@ -1,0 +1,6 @@
+{
+  "signature": "U4/nzxQa6p4gIndv/OCD++TIAbr6axb5SuP1aMdNFt9Y1lkBNLkx/5OFlYseUMUnl7wW8YPRBWmuTopVkw7qBw==",
+  "key_id": "corpus_never_registered",
+  "signed_payload": "{\"chain_scope\":\"account:corpus:run:corpus\",\"metadata\":{},\"occurred_at\":\"2026-01-02T03:04:05Z\",\"payload_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"previous_hash\":null,\"receipt_type\":\"tool.succeeded\",\"schema_version\":\"agent_receipt.v1\",\"sequence\":1,\"status\":\"recorded\",\"subject_id\":\"unknown\",\"subject_type\":\"tool_call\"}",
+  "receipt_hash": "53adbc5ae8073f34cca985bc49d36bb7b9a228415fa0fac7a62be72a3269ce46"
+}

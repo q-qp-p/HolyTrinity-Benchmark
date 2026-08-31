@@ -1,0 +1,6 @@
+{
+  "signature": "qRt6GcRm3Eftn0bZIeFXEozROPkZRjXoJFjHYf5o7aNbHhG8t8GD1CeshTvYWEJHJ6SkqgdgDHQzW+XZXEvtAA==",
+  "key_id": "corpus_compromised_v1",
+  "signed_payload": "{\"chain_scope\":\"account:corpus:run:corpus\",\"metadata\":{},\"occurred_at\":\"2026-01-02T03:04:05Z\",\"payload_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"previous_hash\":null,\"receipt_type\":\"tool.succeeded\",\"schema_version\":\"agent_receipt.v1\",\"sequence\":1,\"status\":\"recorded\",\"subject_id\":\"compromised\",\"subject_type\":\"tool_call\"}",
+  "receipt_hash": "b4c58b151918a049322f2240baaead9355434d5dc9078874c77306b7e3c2780b"
+}
