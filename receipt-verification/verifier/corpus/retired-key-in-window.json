@@ -1,0 +1,6 @@
+{
+  "key_id": "corpus_retired_v2",
+  "receipt_hash": "1c8952f243bf1b7a405511ec2c19521987951aea6f734ace5fbdc378c23c6bd4",
+  "signature": "CWqhisgeA75+1Azl1QGcjq9FA2d/oQKxcmAfy9blABv1cqFeX7fLknEVeOJZIAcI0zCLb3CWTxfgHTULDKXsCQ==",
+  "signed_payload": "{\"chain_scope\":\"account:corpus:run:corpus\",\"metadata\":{},\"occurred_at\":\"2025-06-15T00:00:00Z\",\"payload_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"previous_hash\":null,\"receipt_type\":\"tool.succeeded\",\"schema_version\":\"agent_receipt.v1\",\"sequence\":1,\"status\":\"recorded\",\"subject_id\":\"retired-in-window\",\"subject_type\":\"tool_call\"}"
+}

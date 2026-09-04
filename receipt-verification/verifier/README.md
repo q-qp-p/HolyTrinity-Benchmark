@@ -25,24 +25,18 @@ exists, cross-checking one against the other becomes available and **disagreemen
 itself an alarm.** Until then there is one channel, and this document says so rather than sending
 you to look for a mirror that is not there.
 
-## Exit codes
+## Exit codes and verdicts
 
-| code | verdict | what it says about the receipt |
-|---|---|---|
-| `0` | verified | the signature is good under an independently supplied key |
-| `1` | signature invalid | **the receipt is bad** — content and signature disagree |
-| `2` | usage error | nothing; the invocation was malformed |
-| `5` | **trust not established** | **the receipt is unjudged** — no independent basis to check it |
-| `6` | key compromised | signature valid, signer trust degraded — **provisional code** |
+**`VERDICTS.md`, beside this file, is the single source.** It defines every code, every input
+condition that produces it, and the order the checks run in, and the cross-check test parses it.
+This README does not restate the table: four copies of one rule is how the copies drift.
 
-`1` and `5` are deliberately different and must not be collapsed. `1` means the receipt is bad.
-`5` means we were not given what would be needed to judge it. Reporting the second as the first
-tells an examiner a receipt was **forged** when it was merely **unverifiable as presented**, and
-those demand opposite responses.
+The codes are frozen at `0 1 2 5 6`. The distinction to carry in your head is that **`1` accuses
+the receipt and `5` declines to judge it**, and collapsing them tells an examiner a receipt was
+**forged** when it was merely **unverifiable as presented**. Those demand opposite responses.
 
 **`5` is shared with the VIRP verifier.** The others are this project's proposal and are
-**provisional** pending reconciliation of the two vocabularies; the shared convention document
-freezes when that reconciliation is done, and will name both implementations as co-origins.
+**provisional** pending reconciliation of the two vocabularies.
 
 ## What a verified signature actually attests
 
@@ -61,8 +55,14 @@ signature over content alone gives you.
 3. `signature` is Ed25519 (RFC 8032) over those same bytes, base64.
 4. `key_id` names the registry entry whose `public_key` checks it.
 
-Verification is: look up `key_id` in the registry, refuse if absent or `example`, check the
-signature over `signed_payload`, then report by the entry's `status`.
+Verification, in the order `VERDICTS.md` fixes: look up `key_id` in the registry and refuse if it
+is absent **or named more than once**; refuse an `example` entry, a status the registry does not
+define, or an entry that **does not hash to its own `public_key_fingerprint`**; refuse a receipt
+whose signed `occurred_at` is **outside the key's signing window** `[valid_from, valid_to)`; then
+hold the receipt itself to its own `receipt_hash`, to **agreement between any visible top-level
+field and the signed bytes**, and to the signature; then report by the entry's `status`.
+
+Every trust question runs before every accusation, because an accusation requires standing.
 
 ## The compromised verdict states its own limit
 
@@ -97,6 +97,15 @@ An examiner who does not trust us has no reason to trust it either. Three things
 **Not yet reproducibly buildable.** These are scripts run by stock runtimes, so there is no build
 to reproduce — but neither is there a signed release artifact you can pin. Stated because you would
 otherwise have to find it out.
+
+## A limitation this verifier discloses rather than hides
+
+**`key_id` is not inside the signed bytes.** A receipt names the registry entry that judges it, so
+whoever presents a receipt selects which entry applies by editing an unsigned field. v1 trusts the
+presenter's `key_id` to select the entry; **registries must therefore keep public keys unique per
+entry**; v2 binds `key_id` into the signed bytes and closes it. Recorded as row `V-KEYSUB` in
+`VERDICTS.md`, whose expected exit is the current behaviour so the limitation stays pinned rather
+than forgotten.
 
 ## Pattern credit
 

@@ -7,18 +7,14 @@
 # No Mix project, no hex packages, no network. Requires Elixir 1.17 / OTP 27 or later for the
 # built-in `:json` module; verified on Elixir 1.19.2 / OTP 28.
 #
-# EXIT CODES — see README.md. `5` is shared with the VIRP verifier; the others are this project's
-# proposal and are PROVISIONAL pending reconciliation of the two vocabularies.
+# EXIT CODES AND EVERY VERDICT CASE ARE DEFINED IN ONE PLACE: VERDICTS.md, beside this file. It is
+# the single source, it is parsed by the cross-check test, and this header cites it rather than
+# restating it. Four copies of one rule is how the copies drift.
 #
-#   0  verified                 the signature is good under an independently supplied key
-#   1  signature invalid        THE RECEIPT IS BAD — content and signature disagree
-#   2  usage error              says nothing about the receipt
-#   5  trust not established    THE RECEIPT IS UNJUDGED — no independent basis to check it against
-#   6  key compromised          signature valid, signer trust degraded (PROVISIONAL CODE)
-#
-# `1` and `5` are deliberately different. `1` means the receipt is bad. `5` means we were not given
-# what we would need to judge it. Reporting the second as the first tells an examiner a receipt was
-# forged when it was merely unverifiable as presented.
+# The numbers are frozen at 0, 1, 2, 5, 6 and no others may be introduced. `5` is shared with the
+# VIRP verifier; the rest are this project's proposal and are PROVISIONAL. The one distinction to
+# carry in your head while reading: `1` accuses the receipt, `5` declines to judge it, and
+# collapsing them tells an examiner a receipt was forged when it was merely unverifiable.
 #
 # PATTERN CREDIT — the default-distrust posture, the refusal when signer trust is not established
 # from bundle-local key material, and the discipline of disclosing flaws unprompted are taken from:
@@ -31,7 +27,7 @@
 # It is short and dependency-free so it can be read in full, the signing scheme is specified in
 # README.md so it can be reimplemented from scratch, and a second independent implementation ships
 # beside it (verify_receipt.py, Python standard library only). Two implementations agreeing is a
-# stronger basis than either alone.
+# stronger basis than either alone. They share NO code, on purpose.
 
 defmodule VerifyReceipt do
   @exit_verified 0
@@ -40,35 +36,41 @@ defmodule VerifyReceipt do
   @exit_no_trust 5
   @exit_compromised 6
 
+  @statuses ~w(example active retired compromised)
+  @envelope ~w(signature key_id signed_payload receipt_hash)
+  @ignored ~w(public_key _note)
+  @timestamp ~r/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/
+
   def main(argv) do
-    case parse(argv) do
+    case parse(argv, %{}) do
       {:ok, receipt_path, registry_path} -> run(receipt_path, registry_path)
       {:error, message} -> fail(@exit_usage, message)
+      {:no_registry} -> fail(@exit_no_trust, :no_registry)
     end
   end
 
-  defp parse(argv) do
-    opts =
-      argv
-      |> Enum.chunk_every(2)
-      |> Enum.reduce(%{}, fn
-        ["--receipt", value], acc -> Map.put(acc, :receipt, value)
-        ["--registry", value], acc -> Map.put(acc, :registry, value)
-        _other, acc -> acc
-      end)
+  # Scanned explicitly rather than chunked, so `--receipt` with no value after it is a USAGE error
+  # and never a silently dropped flag that changes the verdict.
+  defp parse([flag], _opts) when flag in ["--receipt", "--registry"],
+    do: {:error, "usage: #{flag} requires a value"}
 
+  defp parse([flag, value | rest], opts) when flag in ["--receipt", "--registry"],
+    do: parse(rest, Map.put(opts, flag, value))
+
+  defp parse([_ignored | rest], opts), do: parse(rest, opts)
+
+  defp parse([], opts) do
     cond do
-      is_nil(opts[:receipt]) ->
+      is_nil(opts["--receipt"]) ->
         {:error, "usage: verify_receipt.exs --receipt RECEIPT.json --registry REGISTRY.json"}
 
       # DEFAULT DISTRUST. Absent an independently supplied registry there is no basis to judge the
-      # receipt, and inventing one from the bundle is the failure this whole scheme exists to
-      # remove. This is a refusal, not a verdict — hence 5, not 1.
-      is_nil(opts[:registry]) ->
-        {:error, :no_registry}
+      # receipt, and inventing one from the bundle is the failure this scheme exists to remove.
+      is_nil(opts["--registry"]) ->
+        {:no_registry}
 
       true ->
-        {:ok, opts[:receipt], opts[:registry]}
+        {:ok, opts["--receipt"], opts["--registry"]}
     end
   end
 
@@ -81,103 +83,307 @@ defmodule VerifyReceipt do
     end
   end
 
-  defp verify(receipt, registry) do
+  defp verify(receipt, registry) when is_map(receipt) do
     payload = receipt["signed_payload"]
     signature = receipt["signature"]
     key_id = receipt["key_id"]
 
-    cond do
-      not is_binary(payload) or not is_binary(signature) or not is_binary(key_id) ->
-        fail(@exit_usage, "receipt must carry signed_payload, signature and key_id")
-
-      true ->
-        note_ignored_key(receipt)
-        entry = find_entry(registry, key_id)
-        check(entry, key_id, payload, signature, receipt)
+    if not (is_binary(payload) and is_binary(signature) and is_binary(key_id)) do
+      fail(@exit_usage, "receipt must carry signed_payload, signature and key_id")
     end
+
+    note_ignored_key(receipt)
+
+    # ORDER IS VERDICTS.md's. Every trust question precedes every accusation, because an
+    # accusation requires standing.
+    entry = trusted_entry(registry, key_id)
+    signed = signed_object(payload)
+    occurred = occurred_at(signed)
+    {valid_from, valid_to} = window(entry, key_id)
+
+    check_hash(receipt, payload)
+    check_siblings(receipt, signed)
+    raw_key = check_signature(payload, signature, entry)
+    _ = raw_key
+
+    if entry["status"] == "compromised", do: compromised(key_id, entry)
+
+    check_window(occurred, valid_from, valid_to, key_id, entry, signed)
+
+    verified(key_id, entry)
   end
 
+  defp verify(_receipt, _registry), do: fail(@exit_usage, "the receipt must be a JSON object")
+
   # The receipt may carry a public_key. It is NEVER used. A verifier that reads the key out of the
-  # thing it is checking is checking a signature against a key the same party supplied, which
-  # establishes nothing — it is the symmetric scheme wearing asymmetric clothes.
+  # thing it is checking establishes nothing — it is the symmetric scheme wearing asymmetric
+  # clothes.
   defp note_ignored_key(receipt) do
     if is_binary(receipt["public_key"]) do
       IO.puts("note: the receipt carries a public_key; it is ignored. Trust comes from --registry.")
     end
   end
 
-  defp find_entry(registry, key_id) do
-    (registry["entries"] || []) |> Enum.find(fn entry -> entry["key_id"] == key_id end)
-  end
+  defp trusted_entry(registry, key_id) do
+    entries = Enum.filter(registry["entries"] || [], &(is_map(&1) and &1["key_id"] == key_id))
 
-  defp check(nil, key_id, _payload, _signature, _receipt) do
-    fail(@exit_no_trust, """
-    TRUST NOT ESTABLISHED — the registry does not name key_id #{inspect(key_id)}.
+    case entries do
+      [] ->
+        fail(@exit_no_trust, """
+        TRUST NOT ESTABLISHED — the registry does not name key_id #{inspect(key_id)}.
 
-    This is not a statement that the receipt is bad. It is a statement that the registry you
-    supplied gives no basis to judge it. Obtain the registry that names this key, from a channel
-    independent of the receipt, and run again. The verifier does not fall back to any other key.
-    """)
-  end
+        This is not a statement that the receipt is bad. It is a statement that the registry you
+        supplied gives no basis to judge it. The verifier does not fall back to any other key.
+        """)
 
-  defp check(%{"status" => "example"}, key_id, _payload, _signature, _receipt) do
-    fail(@exit_no_trust, """
-    TRUST NOT ESTABLISHED — key_id #{inspect(key_id)} is an example key, not a trust root.
+      # V-DUPKEY. Taking the first would let DOCUMENT ORDER select the verdict, inside a file whose
+      # governing rule is that entries are never removed or rewritten.
+      [_first, _second | _rest] ->
+        fail(@exit_no_trust, """
+        TRUST NOT ESTABLISHED — the registry names key_id #{inspect(key_id)} #{length(entries)} times.
 
-    Example entries exist to demonstrate the registry's schema. They are generated from a published
-    string, so their private half is not secret and anything they sign proves nothing.
-    """)
-  end
+        The registry is append-only: an entry is never removed and never rewritten, so one key_id
+        names one key. Two entries mean the file is internally inconsistent, and picking either one
+        would let the ORDER of a document decide the verdict.
 
-  defp check(entry, key_id, payload, signature, receipt) do
-    with :ok <- check_hash(receipt, payload),
-         :ok <- check_signature(payload, signature, entry["public_key"]) do
-      case entry["status"] do
-        "compromised" -> compromised(key_id, entry)
-        _active_or_retired -> verified(key_id, entry)
-      end
-    else
-      {:error, code, message} -> fail(code, message)
+        Detected on key_id only. Two entries sharing a public key under DIFFERENT key_ids is not
+        this error.
+        """)
+
+      [only] ->
+        check_status(only, key_id)
+        check_fingerprint(only, key_id)
+        only
     end
   end
+
+  # DEFAULT DENY. The registry defines exactly four statuses. A status this verifier cannot
+  # interpret is a reason to refuse, never to pass.
+  defp check_status(entry, key_id) do
+    status = entry["status"]
+
+    cond do
+      is_binary(status) and status == "example" ->
+        fail(@exit_no_trust, """
+        TRUST NOT ESTABLISHED — key_id #{inspect(key_id)} is an example key, not a trust root.
+
+        Example entries exist to demonstrate the registry's schema. They are generated from a
+        published string, so their private half is not secret and anything they sign proves nothing.
+        """)
+
+      is_binary(status) and status in @statuses ->
+        :ok
+
+      true ->
+        fail(@exit_no_trust, """
+        TRUST NOT ESTABLISHED — key_id #{inspect(key_id)} carries status #{inspect(status)}.
+
+        The registry defines exactly four: example, active, retired, compromised. A status outside
+        that set, or absent, is standing this verifier cannot interpret. It refuses rather than
+        treating the unrecognised as the benign.
+        """)
+    end
+  end
+
+  # The entry must hash to its own published fingerprint BEFORE anything it says is believed,
+  # including its status and its window. An entry failing its own integrity check may have been
+  # substituted.
+  defp check_fingerprint(entry, key_id) do
+    stated = entry["public_key_fingerprint"]
+
+    with {:ok, raw} <- decode64(entry["public_key"]),
+         true <- is_binary(stated),
+         true <- Base.encode16(:crypto.hash(:sha256, raw), case: :lower) == stated do
+      :ok
+    else
+      _otherwise ->
+        fail(@exit_no_trust, """
+        TRUST NOT ESTABLISHED — key_id #{inspect(key_id)} does not hash to its own published fingerprint.
+
+        public_key_fingerprint is sha256 over the RAW key bytes, lowercase hex. This entry fails its
+        own integrity check, so nothing it states — its status, its window, its key — can be relied
+        on.
+        """)
+    end
+  end
+
+  defp window(entry, key_id) do
+    from = timestamp(entry["valid_from"])
+    to_raw = entry["valid_to"]
+
+    if is_nil(from) do
+      fail(@exit_no_trust, """
+      TRUST NOT ESTABLISHED — key_id #{inspect(key_id)} has no usable valid_from.
+
+      Accepted form is YYYY-MM-DDTHH:MM:SSZ exactly. A window that cannot be read cannot place a
+      receipt inside or outside it.
+      """)
+    end
+
+    # `:json.decode/1` renders JSON null as the ATOM :null, not nil. Both mean "no upper bound",
+    # and conflating only one of them would read an open-ended window as an unreadable one.
+    to =
+      if to_raw in [nil, :null] do
+        nil
+      else
+        case timestamp(to_raw) do
+          nil ->
+            fail(@exit_no_trust, """
+            TRUST NOT ESTABLISHED — key_id #{inspect(key_id)} has an unreadable valid_to.
+
+            Accepted form is YYYY-MM-DDTHH:MM:SSZ exactly, or null for a key still signing.
+            """)
+
+          value ->
+            value
+        end
+      end
+
+    {from, to}
+  end
+
+  defp signed_object(payload) do
+    try do
+      case :json.decode(payload) do
+        decoded when is_map(decoded) -> decoded
+        _other -> nil
+      end
+    rescue
+      _error -> nil
+    end
+  end
+
+  defp occurred_at(signed) do
+    value = if is_map(signed), do: timestamp(signed["occurred_at"]), else: nil
+
+    if is_nil(value) do
+      fail(@exit_no_trust, """
+      TRUST NOT ESTABLISHED — the signed bytes carry no readable occurred_at.
+
+      occurred_at is the only signing time a receipt carries, and it is what the key's signing
+      window is checked against. Accepted form is YYYY-MM-DDTHH:MM:SSZ exactly; it is refused
+      rather than coerced, so the two implementations cannot drift.
+      """)
+    end
+
+    value
+  end
+
+  # Fixed width, zero padded, most significant field first, one literal UTC suffix. Within that
+  # accepted set, and ONLY within it, byte order is chronological order — which is why the regex is
+  # not decoration but the precondition that makes the comparison correct.
+  defp timestamp(value) when is_binary(value) do
+    if Regex.match?(@timestamp, value), do: value, else: nil
+  end
+
+  defp timestamp(_value), do: nil
 
   defp check_hash(receipt, payload) do
     case receipt["receipt_hash"] do
       hash when is_binary(hash) ->
         actual = :crypto.hash(:sha256, payload) |> Base.encode16(case: :lower)
 
-        if actual == hash,
-          do: :ok,
-          else:
-            {:error, @exit_invalid,
-             "SIGNATURE INVALID — the receipt's own receipt_hash does not match its signed bytes."}
+        if actual != hash do
+          fail(
+            @exit_invalid,
+            "SIGNATURE INVALID — the receipt's own receipt_hash does not match its signed bytes."
+          )
+        end
 
       _absent ->
-        :ok
+        fail(@exit_invalid, """
+        SIGNATURE INVALID — the receipt carries no receipt_hash.
+
+        A receipt states the digest of its own signed bytes. An absent field is not a check to be
+        skipped; it is a receipt that declines to be held to anything.
+        """)
     end
   end
 
-  defp check_signature(payload, signature, public_key) do
-    with {:ok, raw_signature} <- Base.decode64(signature),
-         {:ok, raw_key} <- Base.decode64(public_key || ""),
+  # Any top-level field that also appears inside the signed bytes must agree with it. A reader takes
+  # the visible field for part of the receipt, and the signature covers only the signed bytes.
+  defp check_siblings(receipt, signed) when is_map(signed) do
+    Enum.each(receipt, fn {key, value} ->
+      cond do
+        key in @envelope or key in @ignored -> :ok
+        not Map.has_key?(signed, key) -> :ok
+        tagged(value) == tagged(signed[key]) -> :ok
+        true ->
+          fail(@exit_invalid, """
+          SIGNATURE INVALID — the receipt displays #{inspect(key)} as #{inspect(value)}, but the
+          SIGNED bytes say #{inspect(signed[key])}.
+
+          A reader takes the visible field for part of the receipt. The signature covers only the
+          signed bytes, so a top-level field contradicting them is a claim no signature stands
+          behind.
+          """)
+      end
+    end)
+  end
+
+  defp check_siblings(_receipt, _signed), do: :ok
+
+  # Type-tagged, so equality never merges an integer with a float or a boolean with 1. The canonical
+  # encoding never merges those; a bare `==` in either language does, on exactly the values an
+  # adversary would choose.
+  defp tagged(value) when is_boolean(value), do: {:bool, value}
+  defp tagged(value) when is_integer(value), do: {:int, value}
+  defp tagged(value) when is_float(value), do: {:float, value}
+  defp tagged(value) when is_binary(value), do: {:str, value}
+  defp tagged(value) when value in [nil, :null], do: {:null}
+  defp tagged(value) when is_list(value), do: {:list, Enum.map(value, &tagged/1)}
+
+  defp tagged(value) when is_map(value),
+    do: {:object, value |> Enum.map(fn {k, v} -> {k, tagged(v)} end) |> Enum.sort()}
+
+  defp tagged(value), do: {:other, inspect(value)}
+
+  defp check_signature(payload, signature, entry) do
+    with {:ok, raw_signature} <- decode64(signature),
+         {:ok, raw_key} <- decode64(entry["public_key"]),
          true <- :crypto.verify(:eddsa, :none, payload, raw_signature, [raw_key, :ed25519]) do
-      :ok
+      raw_key
     else
       _otherwise ->
-        {:error, @exit_invalid,
-         "SIGNATURE INVALID — the signature does not check out against the registry's public key."}
+        fail(
+          @exit_invalid,
+          "SIGNATURE INVALID — the signature does not check out against the registry's public key."
+        )
     end
   rescue
     ErlangError ->
-      {:error, @exit_invalid, "SIGNATURE INVALID — malformed signature or key material."}
+      fail(@exit_invalid, "SIGNATURE INVALID — malformed signature or key material.")
   end
+
+  # Half-open: valid_from <= occurred_at < valid_to. VERDICTS.md records why the published
+  # registries settle that convention rather than taste.
+  defp check_window(occurred, from, to, key_id, entry, signed) do
+    outside = occurred < from or (not is_nil(to) and occurred >= to)
+
+    if outside do
+      fail(@exit_no_trust, """
+      TRUST NOT ESTABLISHED — the receipt says it was signed at #{signed["occurred_at"]}, outside
+      key_id #{inspect(key_id)}'s signing window [#{entry["valid_from"]}, #{entry["valid_to"]}).
+
+      A retired key's signatures survive its retirement; a signature dated after the window closed
+      was never covered by that rule. The window is half-open, so an occurred_at equal to valid_to
+      is outside it.
+
+      Sound for honest history, advisory against a forger: occurred_at is asserted by the receipt,
+      and an adversary holding the key can backdate it.
+      """)
+    end
+  end
+
+  defp decode64(value) when is_binary(value), do: Base.decode64(value)
+  defp decode64(_value), do: :error
 
   defp verified(key_id, entry) do
     IO.puts("""
     VERIFIED — signature is valid under key_id #{inspect(key_id)} (status: #{entry["status"]}).
 
-    A retired key verifies exactly like an active one. Rotation does not invalidate receipts already
-    issued; only new signing stops.
+    A retired key verifies exactly like an active one WITHIN ITS SIGNING WINDOW. Rotation does not
+    invalidate receipts already issued; only new signing stops.
 
     Note what this attests: the signed bytes carry the receipt's sequence and previous_hash, so a
     valid signature binds the receipt's POSITION IN ITS CHAIN as well as its content.
@@ -186,23 +392,24 @@ defmodule VerifyReceipt do
     System.halt(@exit_verified)
   end
 
+  # 6 asserts the signature IS cryptographically valid, so it is never reached over a failed
+  # verification. It sits after the receipt checks for that reason and not by accident.
   defp compromised(key_id, entry) do
     IO.puts("""
     KEY COMPROMISED — the signature is cryptographically valid under key_id #{inspect(key_id)}, but
     the registry marks that key compromised as of #{entry["status_changed_at"]}.
 
-    WHAT THIS VERDICT CAN AND CANNOT ESTABLISH, stated here rather than left to be discovered:
+    WHAT THIS VERDICT CAN AND CANNOT ESTABLISH:
 
-      * The signature is genuine in the sense that it checks out against the published key.
+      * The signature checks out against the published key.
       * It does NOT establish that the issuer produced it. Anyone holding the compromised private
         key could have.
-      * Separating a receipt signed BEFORE the compromise from one signed AFTER depends on knowing
-        when it was signed — and the signing time is asserted by the receipt itself, which an
-        adversary holding that key can backdate.
+      * Separating a receipt signed BEFORE the compromise from one signed AFTER depends on the
+        signing time, which the receipt asserts about itself and an adversary holding that key can
+        backdate.
 
-    So this verdict is sound for honest history and advisory against a forger. Closing that gap
-    requires anchoring signing times outside the issuing system; it is named future work, not a
-    solved problem.
+    Sound for honest history, advisory against a forger. Closing the gap requires anchoring signing
+    times outside the issuing system; that is named future work.
 
     Exit code 6 is PROVISIONAL, pending reconciliation with the VIRP vocabulary.
     """)

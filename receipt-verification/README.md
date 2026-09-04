@@ -53,5 +53,7 @@ stops meaning anything the moment "this release" is ambiguous.**
 
 ## Start here
 
-    verifier/README.md      what each exit code means, and why a bundle-local key is refused
+    verifier/VERDICTS.md    THE SINGLE SOURCE: every verdict, the input that produces it, and
+                            the order the checks run in
+    verifier/README.md      how to run it, the signing scheme, and why a bundle-local key is refused
     keys/README.md          the registry's schema, its statuses, and the append-only rule

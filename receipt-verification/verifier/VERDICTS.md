@@ -1,0 +1,179 @@
+# Verdicts
+
+**This file is the single source of truth for what each verifier exit code means and for which
+input produces it.** `verify_receipt.py`, `verify_receipt.exs`, `README.md` and the cross-check
+matrix all cite this table rather than restating it. Four copies of one rule is how the copies
+drift; there is now one copy and three citations.
+
+**Every trust question precedes every accusation, and `6` is asserted only over a signature that
+has already verified.**
+
+The cross-check test **parses this file**. A row with no fixture fails it, a fixture with no row
+fails it, and an expected exit changed here without a matching code change fails it. The table is
+executable documentation, not a description of it.
+
+## The codes
+
+They are frozen. `0 1 2 5 6`, and no others may be introduced (`docs/naming.md:41-42`).
+
+| code | verdict | what it says about the receipt |
+|---|---|---|
+| `0` | verified | the signature is good under an independently supplied key whose standing the registry establishes |
+| `1` | signature invalid | **the receipt is bad** — its own bytes, hash, fields or signature disagree |
+| `2` | usage error | nothing about any receipt; the invocation was malformed |
+| `5` | trust not established | **the receipt is unjudged** — no independent basis to judge it |
+| `6` | key compromised | signature valid, signer trust degraded — **provisional** |
+
+**`1` and `5` are deliberately different and must never be collapsed.** `1` accuses the receipt.
+`5` declines to judge it. Reporting the second as the first tells an examiner a receipt was
+**forged** when it was merely **unverifiable as presented**, and those demand opposite responses.
+`5` is shared with the VIRP verifier; the others are this project's proposal and are provisional
+pending reconciliation of the two vocabularies.
+
+## How to read a row
+
+`registry` and `receipt` are **closed vocabularies of tokens, never command lines.** The table can
+name a situation; it can never name an invocation. Adding a token is deliberately a code change.
+
+| token | in `registry` | in `receipt` |
+|---|---|---|
+| a path | `--registry <path>` | `--receipt <path>` |
+| `corpus` | `--registry corpus/registry.json` | — |
+| `duplicate` | `--registry corpus/registry-duplicate-key-id.json` | — |
+| `live` | `--registry ../keys/registry.json` | — |
+| `absent-from` | `--registry corpus/registry-absent-valid-from.json` | — |
+| `null-from` | `--registry corpus/registry-null-valid-from.json` | — |
+| `none` | the flag is omitted entirely | the flag is omitted entirely |
+| `dangling` | — | `--receipt` supplied with no value after it |
+
+Paths are relative to `verifier/`, which is where both verifiers are run from.
+
+## The table
+
+| id | receipt | registry | exit | verdict | why |
+|---|---|---|---|---|---|
+| V-VERIFIED | `corpus/verified.json` | `corpus` | `0` | verified | active key, inside its window, fingerprint matches, hash and signature agree |
+| V-RETIRED-IN | `corpus/retired-key-in-window.json` | `corpus` | `0` | verified | a retired key's signatures survive its retirement; `occurred_at` is inside the signing window |
+| V-KEYSUB | `corpus/key-substitution.json` | `corpus` | `0` | verified | ACCEPTED-KNOWN-LIMITATION, see below; `key_id` is outside the signed bytes so the presenter selects the judging entry |
+| V-INVALID-SIG | `corpus/invalid-signature.json` | `corpus` | `1` | signature invalid | the payload gained a byte after signing; its own `receipt_hash` no longer matches its bytes |
+| V-WRONG-KEY | `corpus/wrong-key.json` | `corpus` | `1` | signature invalid | signed by a key that is not the one the registry names for this `key_id` |
+| V-TRUNCATED | `corpus/truncated.json` | `corpus` | `1` | signature invalid | the signature is not 64 bytes, which Ed25519 requires |
+| V-HASH-ABSENT | `corpus/no-receipt-hash.json` | `corpus` | `1` | signature invalid | `receipt_hash` is absent, so the receipt states no digest to be held to; absence is a failure, not a skip |
+| V-SIBLING | `corpus/sibling-contradiction.json` | `corpus` | `1` | signature invalid | a top-level field contradicts the same field inside the signed bytes |
+| V-EXAMPLE-KEY | `corpus/example-key.json` | `corpus` | `5` | trust not established | an example entry is never a trust root; its private half is derived from a published string |
+| V-UNKNOWN-KEYID | `corpus/unknown-key-id.json` | `corpus` | `5` | trust not established | the registry names no such `key_id`, and the verifier never falls back to another key |
+| V-STATUS-UNKNOWN | `corpus/revoked-key.json` | `corpus` | `5` | trust not established | the entry's status is not one of the four the registry defines; unknown standing is not good standing |
+| V-STATUS-ABSENT | `corpus/no-status-key.json` | `corpus` | `5` | trust not established | the entry carries no status at all; default deny |
+| V-FINGERPRINT | `corpus/bad-fingerprint-key.json` | `corpus` | `5` | trust not established | the entry does not hash to its own published `public_key_fingerprint`, so nothing it says can be believed |
+| V-WINDOW-AFTER | `corpus/expired-key.json` | `corpus` | `5` | trust not established | `occurred_at` is at or after `valid_to`; the key was not signing then |
+| V-WINDOW-EDGE | `corpus/window-edge-key.json` | `corpus` | `5` | trust not established | `occurred_at` equals `valid_to` exactly; the window is half-open and excludes its upper bound |
+| V-WINDOW-BEFORE | `corpus/window-before-key.json` | `corpus` | `5` | trust not established | `occurred_at` is before `valid_from`, a claim to have been signed in an era the key did not cover |
+| V-BOUND-ABSENT | `corpus/verified.json` | `absent-from` | `5` | trust not established | the entry omits `valid_from`; a required bound that is missing makes the entry malformed and its era unjudgeable |
+| V-BOUND-NULL | `corpus/verified.json` | `null-from` | `5` | trust not established | the entry's `valid_from` is null; a bound is open-ended only where the schema permits it, and it does not permit it here |
+| V-RETIRED-OUT | `corpus/retired-key-out-of-window.json` | `corpus` | `5` | trust not established | retired key, `occurred_at` after `valid_to`; retirement refuses post-window signatures |
+| V-DUPKEY | `corpus/verified.json` | `duplicate` | `5` | trust not established | the registry names one `key_id` more than once, so position would select the verdict; an internally inconsistent trust root gives no basis to judge |
+| V-NO-REGISTRY | `corpus/verified.json` | `none` | `5` | trust not established | no registry supplied; a key arriving with the evidence establishes nothing |
+| V-WRONG-REGISTRY | `corpus/verified.json` | `live` | `5` | trust not established | the published registry does not name this corpus `key_id`; a finding about the command line, not the receipt |
+| V-COMPROMISED | `corpus/compromised-key.json` | `corpus` | `6` | key compromised | signature valid and in window, under a key the registry marks compromised |
+| V-NO-RECEIPT | `none` | `corpus` | `2` | usage error | no `--receipt`; says nothing about any receipt |
+| V-ARGV-ODD | `dangling` | `corpus` | `2` | usage error | `--receipt` with no value; a malformed invocation must not be read as a verdict |
+
+## The order the checks run in, because two conditions can both be true
+
+Both implementations evaluate in this order and stop at the first that fires:
+
+1. **`2`** — malformed invocation, unreadable input, or a receipt missing `signed_payload`,
+   `signature` or `key_id`. Nothing was measured.
+2. **`5`** — no registry; `key_id` absent from the registry; `key_id` present more than once;
+   entry status missing or outside the defined four; status `example`; fingerprint absent or not
+   matching `sha256(raw public_key bytes)`; `occurred_at` absent or not the accepted timestamp form.
+3. **`1`** — `receipt_hash` absent or mismatched; a sibling field contradicting the signed bytes;
+   signature failing to verify.
+4. **`6`** — status `compromised`.
+5. **`5`** — `occurred_at` outside `[valid_from, valid_to)`.
+6. **`0`** — otherwise.
+
+**Why every trust question precedes every accusation.** Steps 2 and 5 mean *we cannot judge this*;
+step 3 means *this receipt is bad*. An accusation requires standing. Concretely: a good receipt
+checked against the wrong registry must report `5`, and it only does so because the `key_id` lookup
+runs before the hash and signature comparisons.
+
+**Why `6` precedes the window.** Exit `6` states that the signature is cryptographically valid,
+which cannot be said over a signature that failed to verify — so `6` is placed after step 3, never
+before it.
+
+## The signing window, stated once so the two implementations cannot drift
+
+`valid_from` and `valid_to` are **the signing window** (`../keys/README.md`). They are compared
+against `occurred_at`, taken from inside the signed bytes, which is the only signing time the
+receipt carries.
+
+**The interval is half-open: `valid_from <= occurred_at < valid_to`.** `valid_to: null` means no
+upper bound. Three facts in the published registries settle the convention rather than taste:
+`example_ed25519_v0` has `valid_from == valid_to`, and `keys/README.md` calls that window *closed*
+with *no verifier accepts it as a trust root* — only half-open makes it genuinely empty;
+`corpus_retired_v1`'s `valid_to` equals `corpus_active_v1`'s `valid_from`, and half-open gives
+every instant at most one authorized key; and `valid_to` equals `status_changed_at`, the instant
+signing stopped.
+
+**Timestamps are accepted only as `YYYY-MM-DDTHH:MM:SSZ`.** Every timestamp in both registries and
+every fixture already has exactly this form. A timestamp in any other form is **refused with `5`**,
+never coerced and never guessed: a verifier that accepts two spellings of an instant is a verifier
+whose two implementations will eventually disagree about one of them.
+
+### Absent versus null, on each bound
+
+**A bound is open-ended only where the registry's own schema permits it.**
+
+| bound | absent | null | why |
+|---|---|---|---|
+| `valid_to` | open-ended | open-ended | the schema makes it optional; `keys/README.md` says it is null while a key is still signing |
+| `valid_from` | **`5`** | **`5`** | the schema makes it required, so neither spelling of "missing" is a window |
+
+**This is a deliberate divergence from the intuitive rule that null means open-ended on either
+bound, and the reason is that the intuitive rule would put two authorities in conflict over one
+file.** `lib/autonomous_agency/authority/key_registry.ex:16` lists `valid_from` in
+`@required_fields` and **deliberately omits `valid_to`**, and its `present?/1` at `:94` returns
+false for `nil` — so in-tree, an absent `valid_from` and a null one are **already** treated
+identically, and both are invalid. A verifier that accepted `valid_from: null` as "no lower bound"
+would accept a registry that `KeyRegistry.validate/1` rejects. Two authorities disagreeing about
+the same file is the defect this table exists to remove, not one to introduce.
+
+`V-BOUND-ABSENT` and `V-BOUND-NULL` pin both halves, so the seam where the two implementations
+could drift — Python collapsing absent and null into `None`, Elixir splitting them across `nil` and
+the `:null` atom that `:json.decode/1` produces — goes red rather than silent.
+
+**This check is sound for honest history and advisory against a forger**, the same limit the
+compromised verdict states: `occurred_at` is asserted by the receipt, and an adversary holding the
+key can backdate it. Closing that gap needs a signing time anchored outside the issuing system.
+That is named future work, not a solved problem.
+
+## Two limitations this table records rather than hides
+
+**V-KEYSUB — `key_id` is not inside the signed bytes.** A receipt names the registry entry that
+judges it, so a presenter holding one signature can select which entry applies by editing an
+unsigned field. In this corpus `corpus_active_v1` and `corpus_revoked_v1` carry the same public
+key, and the same bytes verify under either. **Exit `0` is the documented v1 behaviour and the
+matrix asserts it**, so the limitation is pinned rather than forgotten. It is unenforceable in v1
+and is closed by the v2 preimage (domain separation), at which point the row's **v2 expectation**
+becomes a non-zero exit. **The flip changes the v2 expectation only and never the v1 one:**
+v1-format receipts keep exit `0` under this limitation permanently, and once v2 exists the matrix
+asserts per format. Until then, **a production registry must never hold one public key under two
+entries.**
+
+**Duplicate detection is on `key_id` only.** V-DUPKEY fires when one `key_id` appears more than
+once. **Duplicate public keys across distinct `key_id`s are not an error at the verifier and must
+not become one** — that is the shape the reused-key fixtures in this corpus depend on. Why a real
+registry must avoid them regardless is V-KEYSUB above, which is a different finding with a
+different closer.
+
+## One stricter rule considered and not adopted
+
+A top-level field that appears **nowhere** in the signed payload is **ignored**, not refused. The
+stricter rule — refuse any top-level field the signature does not cover — was considered and not
+taken in this pass, because it exceeds the approved change set. It has a real argument behind it: a
+receipt carrying `"approved_by": "alice"` at top level is covered by no signature, and an examiner
+reading the JSON may take it for part of the receipt. The bound today is that the production export
+emits exactly `signature`, `key_id`, `signed_payload`, `receipt_hash`
+(`ops/verification/frozen_stranger_sequence.sh:126-133`, a frozen file). **Recorded here as a known
+gap so that the weaker rule is a decision on the record and not an oversight.**

@@ -10,14 +10,14 @@ This is the SECOND, INDEPENDENT implementation. verify_receipt.exs is the refere
 implementations exist so an examiner who distrusts one can run the other, and so neither can drift
 unnoticed — a shared corpus is run through both in CI and their verdicts must agree.
 
-EXIT CODES — see README.md. `5` is shared with the VIRP verifier; the others are this project's
-proposal and are PROVISIONAL pending reconciliation of the two vocabularies.
+EXIT CODES AND EVERY VERDICT CASE ARE DEFINED IN ONE PLACE: VERDICTS.md, beside this file. It is
+the single source, it is parsed by the cross-check test, and this header cites it rather than
+restating it. Four copies of one rule is how the copies drift.
 
-    0  verified               the signature is good under an independently supplied key
-    1  signature invalid      THE RECEIPT IS BAD
-    2  usage error            says nothing about the receipt
-    5  trust not established   THE RECEIPT IS UNJUDGED
-    6  key compromised        signature valid, signer trust degraded (PROVISIONAL)
+The numbers are frozen at 0, 1, 2, 5, 6 and no others may be introduced. `5` is shared with the
+VIRP verifier; the rest are this project's proposal and are PROVISIONAL. The one distinction to
+carry in your head while reading the code below: `1` accuses the receipt, `5` declines to judge it,
+and collapsing them tells an examiner a receipt was forged when it was merely unverifiable.
 
 PATTERN CREDIT — default-distrust posture, refusal with a distinct code when signer trust is not
 established from bundle-local key material, flaws disclosed unprompted:
@@ -34,8 +34,10 @@ file and verify_receipt.exs must agree on every case, including known-bad signat
 and truncated input. Verification only — this file never signs anything.
 """
 
+import base64
 import hashlib
 import json
+import re
 import sys
 
 EXIT_VERIFIED, EXIT_INVALID, EXIT_USAGE, EXIT_NO_TRUST, EXIT_COMPROMISED = 0, 1, 2, 5, 6
@@ -119,26 +121,75 @@ def ed25519_verify(signature, message, public_key):
     return _scalarmult(B, s) == _edwards(r, _scalarmult(a, h))
 
 
-# --- verdicts ----------------------------------------------------------------------------------
+# --- verdicts ------------------------------------------------------------------------------------
+# Order, and the whole of it, is VERDICTS.md's "the order the checks run in". Every trust question
+# precedes every accusation, because an accusation requires standing.
+STATUSES = ("example", "active", "retired", "compromised")
+ENVELOPE = ("signature", "key_id", "signed_payload", "receipt_hash")
+IGNORED = ("public_key", "_note")
+TS = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+
+
 def die(code, message, stream=sys.stderr):
     print(message, file=stream)
     sys.exit(code)
 
 
 def b64(value):
-    import base64
-
     try:
         return base64.b64decode(value, validate=True)
     except Exception:
         return None
 
 
+def timestamp(value):
+    """The instant, as a comparable tuple, or None when the form is not the accepted one.
+
+    Only `YYYY-MM-DDTHH:MM:SSZ` is accepted. A verifier that accepts two spellings of an instant is
+    a verifier whose two implementations eventually disagree about one of them, and the disagreement
+    surfaces first on a real receipt rather than in the corpus. Not coerced, not guessed: refused.
+    """
+    if not isinstance(value, str) or not TS.match(value):
+        return None
+    return (value[0:4], value[5:7], value[8:10], value[11:13], value[14:16], value[17:19])
+
+
+def tagged(value):
+    """Type-tagged form, so equality never merges an int with a float or a bool with 1.
+
+    VERDICTS.md's canonical encoding never merges integers and floats; Python's `==` does, and
+    `True == 1` as well. Comparing untagged would make a contradiction invisible on exactly the
+    values an adversary would choose.
+    """
+    if value is None:
+        return ("null",)
+    if isinstance(value, bool):
+        return ("bool", value)
+    if isinstance(value, int):
+        return ("int", value)
+    if isinstance(value, float):
+        return ("float", value)
+    if isinstance(value, str):
+        return ("str", value)
+    if isinstance(value, list):
+        return ("list", [tagged(v) for v in value])
+    if isinstance(value, dict):
+        return ("object", sorted((k, tagged(v)) for k, v in value.items()))
+    return ("other", repr(value))
+
+
 def main(argv):
     opts = {}
-    for i in range(0, len(argv) - 1, 2):
-        if argv[i] in ("--receipt", "--registry"):
-            opts[argv[i][2:]] = argv[i + 1]
+    index = 0
+    while index < len(argv):
+        flag = argv[index]
+        if flag in ("--receipt", "--registry"):
+            if index + 1 >= len(argv):
+                die(EXIT_USAGE, "usage: %s requires a value" % flag)
+            opts[flag[2:]] = argv[index + 1]
+            index += 2
+        else:
+            index += 1
 
     if "receipt" not in opts:
         die(EXIT_USAGE, "usage: verify_receipt.py --receipt RECEIPT.json --registry REGISTRY.json")
@@ -170,6 +221,9 @@ def main(argv):
     except (OSError, ValueError) as error:
         die(EXIT_USAGE, "cannot read input: %s" % error)
 
+    if not isinstance(receipt, dict):
+        die(EXIT_USAGE, "the receipt must be a JSON object")
+
     payload, signature, key_id = (
         receipt.get("signed_payload"),
         receipt.get("signature"),
@@ -182,11 +236,13 @@ def main(argv):
     if isinstance(receipt.get("public_key"), str):
         print("note: the receipt carries a public_key; it is ignored. Trust comes from --registry.")
 
-    entry = next(
-        (e for e in registry.get("entries", []) if e.get("key_id") == key_id), None
-    )
+    entries = registry.get("entries")
+    if not isinstance(entries, list):
+        die(EXIT_NO_TRUST, "TRUST NOT ESTABLISHED — the registry carries no entries list.")
 
-    if entry is None:
+    matches = [e for e in entries if isinstance(e, dict) and e.get("key_id") == key_id]
+
+    if not matches:
         die(
             EXIT_NO_TRUST,
             "TRUST NOT ESTABLISHED — the registry does not name key_id %r.\n\n"
@@ -195,7 +251,34 @@ def main(argv):
             "key." % key_id,
         )
 
-    if entry.get("status") == "example":
+    # V-DUPKEY. Taking the first match would let DOCUMENT ORDER select the verdict, inside a file
+    # whose governing rule is that entries are never removed or rewritten.
+    if len(matches) > 1:
+        die(
+            EXIT_NO_TRUST,
+            "TRUST NOT ESTABLISHED — the registry names key_id %r %d times.\n\n"
+            "The registry is append-only: an entry is never removed and never rewritten, so one\n"
+            "key_id names one key. Two entries mean the file is internally inconsistent, and\n"
+            "picking either one would let the ORDER of a document decide the verdict.\n"
+            "Detected on key_id only. Two entries sharing a public key under DIFFERENT key_ids is\n"
+            "not this error." % (key_id, len(matches)),
+        )
+
+    entry = matches[0]
+    status = entry.get("status")
+
+    # DEFAULT DENY. The registry defines exactly four statuses. Unknown standing is not good
+    # standing, and a status this verifier cannot interpret is a reason to refuse, never to pass.
+    if not isinstance(status, str) or status not in STATUSES:
+        die(
+            EXIT_NO_TRUST,
+            "TRUST NOT ESTABLISHED — key_id %r carries status %r.\n\n"
+            "The registry defines exactly four: example, active, retired, compromised. A status\n"
+            "outside that set, or absent, is standing this verifier cannot interpret. It refuses\n"
+            "rather than treating the unrecognised as the benign." % (key_id, status),
+        )
+
+    if status == "example":
         die(
             EXIT_NO_TRUST,
             "TRUST NOT ESTABLISHED — key_id %r is an example key, not a trust root.\n\n"
@@ -204,18 +287,85 @@ def main(argv):
             % key_id,
         )
 
+    # The entry must hash to its own published fingerprint BEFORE anything it says is believed,
+    # including its status and its window. An entry failing its own integrity check may have been
+    # substituted, and reporting a benign story read out of it would be the wrong answer.
+    raw_key = b64(entry.get("public_key") or "")
+    stated = entry.get("public_key_fingerprint")
+    if raw_key is None or not isinstance(stated, str) or hashlib.sha256(raw_key).hexdigest() != stated:
+        die(
+            EXIT_NO_TRUST,
+            "TRUST NOT ESTABLISHED — key_id %r does not hash to its own published fingerprint.\n\n"
+            "public_key_fingerprint is sha256 over the RAW key bytes, lowercase hex. This entry\n"
+            "fails its own integrity check, so nothing it states — its status, its window, its key —\n"
+            "can be relied on." % key_id,
+        )
+
+    valid_from, valid_to = timestamp(entry.get("valid_from")), entry.get("valid_to")
+    if valid_from is None:
+        die(
+            EXIT_NO_TRUST,
+            "TRUST NOT ESTABLISHED — key_id %r has no usable valid_from.\n\n"
+            "Accepted form is YYYY-MM-DDTHH:MM:SSZ exactly. A window that cannot be read cannot\n"
+            "place a receipt inside or outside it." % key_id,
+        )
+    if valid_to is not None:
+        valid_to = timestamp(valid_to)
+        if valid_to is None:
+            die(
+                EXIT_NO_TRUST,
+                "TRUST NOT ESTABLISHED — key_id %r has an unreadable valid_to.\n\n"
+                "Accepted form is YYYY-MM-DDTHH:MM:SSZ exactly, or null for a key still signing."
+                % key_id,
+            )
+
+    try:
+        signed = json.loads(payload)
+        if not isinstance(signed, dict):
+            signed = None
+    except ValueError:
+        signed = None
+
+    occurred = timestamp(signed.get("occurred_at")) if signed else None
+    if occurred is None:
+        die(
+            EXIT_NO_TRUST,
+            "TRUST NOT ESTABLISHED — the signed bytes carry no readable occurred_at.\n\n"
+            "occurred_at is the only signing time a receipt carries, and it is what the key's\n"
+            "signing window is checked against. Accepted form is YYYY-MM-DDTHH:MM:SSZ exactly;\n"
+            "it is refused rather than coerced, so the two implementations cannot drift.",
+        )
+
+    # --- the receipt itself. Everything below accuses the receipt, so it runs only once the
+    # --- registry has given us the standing to make an accusation.
     expected_hash = receipt.get("receipt_hash")
-    if isinstance(expected_hash, str):
-        actual = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-        if actual != expected_hash:
+    if not isinstance(expected_hash, str):
+        die(
+            EXIT_INVALID,
+            "SIGNATURE INVALID — the receipt carries no receipt_hash.\n\n"
+            "A receipt states the digest of its own signed bytes. An absent field is not a check\n"
+            "to be skipped; it is a receipt that declines to be held to anything.",
+        )
+    if hashlib.sha256(payload.encode("utf-8")).hexdigest() != expected_hash:
+        die(
+            EXIT_INVALID,
+            "SIGNATURE INVALID — the receipt's own receipt_hash does not match its signed bytes.",
+        )
+
+    for key in receipt:
+        if key in ENVELOPE or key in IGNORED or key not in signed:
+            continue
+        if tagged(receipt[key]) != tagged(signed[key]):
             die(
                 EXIT_INVALID,
-                "SIGNATURE INVALID — the receipt's own receipt_hash does not match its signed bytes.",
+                "SIGNATURE INVALID — the receipt displays %r as %r, but the SIGNED bytes say %r.\n\n"
+                "A reader takes the visible field for part of the receipt. The signature covers\n"
+                "only the signed bytes, so a top-level field contradicting them is a claim no\n"
+                "signature stands behind." % (key, receipt[key], signed[key]),
             )
 
     raw_signature = b64(signature)
-    raw_key = b64(entry.get("public_key") or "")
-    if raw_signature is None or raw_key is None or not ed25519_verify(
+    if raw_signature is None or not ed25519_verify(
         raw_signature, payload.encode("utf-8"), raw_key
     ):
         die(
@@ -223,7 +373,9 @@ def main(argv):
             "SIGNATURE INVALID — the signature does not check out against the registry's public key.",
         )
 
-    if entry.get("status") == "compromised":
+    # 6 asserts the signature IS cryptographically valid, so it cannot be reached over a failed
+    # verification. It sits after the checks above for that reason and not by accident.
+    if status == "compromised":
         die(
             EXIT_COMPROMISED,
             "KEY COMPROMISED — the signature is cryptographically valid under key_id %r, but the\n"
@@ -242,13 +394,33 @@ def main(argv):
             stream=sys.stdout,
         )
 
+    # The window is half-open: valid_from <= occurred_at < valid_to. See VERDICTS.md for why the
+    # published registries settle that convention rather than taste.
+    if occurred < valid_from or (valid_to is not None and occurred >= valid_to):
+        die(
+            EXIT_NO_TRUST,
+            "TRUST NOT ESTABLISHED — the receipt says it was signed at %s, outside key_id %r's\n"
+            "signing window [%s, %s).\n\n"
+            "A retired key's signatures survive its retirement; a signature dated after the window\n"
+            "closed was never covered by that rule. The window is half-open, so an occurred_at\n"
+            "equal to valid_to is outside it.\n\n"
+            "Sound for honest history, advisory against a forger: occurred_at is asserted by the\n"
+            "receipt, and an adversary holding the key can backdate it."
+            % (
+                signed.get("occurred_at"),
+                key_id,
+                entry.get("valid_from"),
+                entry.get("valid_to"),
+            ),
+        )
+
     print(
         "VERIFIED — signature is valid under key_id %r (status: %s).\n\n"
-        "A retired key verifies exactly like an active one. Rotation does not invalidate receipts\n"
-        "already issued; only new signing stops.\n\n"
+        "A retired key verifies exactly like an active one WITHIN ITS SIGNING WINDOW. Rotation does\n"
+        "not invalidate receipts already issued; only new signing stops.\n\n"
         "Note what this attests: the signed bytes carry the receipt's sequence and previous_hash, so\n"
         "a valid signature binds the receipt's POSITION IN ITS CHAIN as well as its content."
-        % (key_id, entry.get("status"))
+        % (key_id, status)
     )
     sys.exit(EXIT_VERIFIED)
 
