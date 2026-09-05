@@ -30,6 +30,25 @@ status                  example | active | retired | compromised
 status_changed_at       when the status last moved
 ```
 
+## Two registries ship here, and they are never mixed
+
+| file | what it is | key ids |
+|---|---|---|
+| `registry.json` | **THE LIVE REGISTRY.** The production signing keys. Verify a real receipt against this one. | `example_ed25519_v0`, `receipt_ed25519_v1` |
+| `evaluation-registry.json` | **THE EVALUATION REGISTRY.** One key, signing pre-registered evaluation runs only. It has never signed a production receipt. | `evaluation_ed25519_v1` |
+
+**A production receipt verified against the evaluation registry reports `unknown key id`, and an
+evaluation receipt verified against the live registry reports the same. That is the design working,
+not a fault.** The two trust stores are disjoint on purpose, so a receipt cannot silently borrow
+standing from the wrong one, and the verifier never falls back from one to the other.
+
+**Why a second file rather than a second entry.** This registry is append-only: an entry added here
+stays forever. An evaluation key appended to `registry.json` would sit in the **production** trust
+root permanently, and every future reader would have to be told why a non-production key is beside
+the production one. A separate published registry gives an examiner the same independent check with
+none of that. **It is the same precedent the live table already rests on** — a staging root is
+separate, published, labelled, and never merged into the production trust store.
+
 ## Append-only, and why it is not a convention
 
 **An entry is never removed and never rewritten.** Only `status`, `valid_to` and

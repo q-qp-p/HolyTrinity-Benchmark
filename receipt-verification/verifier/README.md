@@ -98,6 +98,13 @@ An examiner who does not trust us has no reason to trust it either. Three things
 to reproduce — but neither is there a signed release artifact you can pin. Stated because you would
 otherwise have to find it out.
 
+**There are now pins, and they are not signed artifacts.** Two annotated tags name immutable
+points: `receipt-verification-r1` and `receipt-verification-r2`. Cite one of those rather than a
+branch. **The sentence above stays true as written:** an annotated tag is not a GPG-signed release
+artifact, no such artifact exists, and a tag can be moved by whoever holds the remote. What a tag
+gives you is a fixed name for a commit you can diff against any older clone; what it does not give
+you is a signature over that state.
+
 ## A limitation this verifier discloses rather than hides
 
 **`key_id` is not inside the signed bytes.** A receipt names the registry entry that judges it, so

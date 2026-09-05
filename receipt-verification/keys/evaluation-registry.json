@@ -1,0 +1,22 @@
+{
+  "schema": "receipt_key_registry.v1",
+  "description": "Public keys that verify receipts from PRE-REGISTERED EVALUATION RUNS. This is NOT the production trust root. It is a separate, published, labelled registry, and it is never merged into keys/registry.json -- the staging-root pattern. A production receipt checked against this file reports 'unknown key id', and an evaluation receipt checked against the live registry reports the same. Both are the design working: the two trust stores are disjoint so a receipt cannot borrow standing from the wrong one.",
+  "statuses": {
+    "active": "Currently signing evaluation runs.",
+    "retired": "No longer signing. Receipts it signed within its window remain verifiable.",
+    "compromised": "The private key is believed exposed."
+  },
+  "entries": [
+    {
+      "key_id": "evaluation_ed25519_v1",
+      "algorithm": "ed25519",
+      "public_key": "V5duQnl28gXwddsXpNZqVnskQFcVjXbt+Fob98ZORN0=",
+      "public_key_fingerprint": "c4c380327dd5cb0f29574c64abfb30bb7d557c896c4ae1d17d997810e50fdc13",
+      "valid_from": "2026-09-05T00:07:58Z",
+      "valid_to": null,
+      "status": "active",
+      "status_changed_at": "2026-09-05T00:07:58Z",
+      "note": "SIGNS PRE-REGISTERED EVALUATION RUNS ONLY. Generated in an operator ceremony on 2026-09-04; the seed is held by the operator and is not in this repository or its history. It has never signed a production receipt and must never be accepted as a production trust root. Its purpose is that an examiner can verify a harness run's receipts against a registry obtained from this channel rather than from the run's own bundle."
+    }
+  ]
+}

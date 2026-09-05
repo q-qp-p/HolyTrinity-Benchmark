@@ -1,5 +1,12 @@
 # Changelog
 
+**Scope: benchmark releases only.** `receipt-verification/` is versioned independently, on its own
+schedule, and its releases are **not** recorded here. They are recorded by the annotated tags
+`receipt-verification-r1` and `receipt-verification-r2`, which name immutable points, and in the
+digest ledger `docs/external/receipt-verification.provenance.md` in the private tree, which carries
+the per-file digests for each release. This note exists because the absence of those releases from
+this file was previously indistinguishable from an omission.
+
 ## v1.2 — 2026-08-03
 
 Two provenance defects found by an independent review of the v2.0 plan, which asked a question

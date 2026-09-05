@@ -108,6 +108,28 @@ SHA256SUMS          SHA-256 for every file in the release; `sha256sum -c SHA256S
                     the bytes you hold are the ones described here
 ```
 
+## Verify a receipt yourself
+
+`receipt-verification/` holds what you need to check a Trinity authority receipt **without
+trusting us**: the public key registry, two independent offline verifiers, and a corpus that
+exercises every verdict they can produce.
+
+**What you can establish on your own.** That a receipt's signature is genuine under a key you
+obtained from here rather than from whoever handed you the receipt; that the key's standing at the
+time the receipt says it was signed permits that signature; and that a receipt whose visible fields
+disagree with its signed bytes is refused rather than accepted. No network, no packages, no build.
+
+**What you cannot establish from this directory alone.** That the events described in a receipt
+happened. A signature binds a record to a signer and to a position in a chain; it does not witness
+the world.
+
+**Pins.** Two annotated tags name immutable points: `receipt-verification-r1` and
+`receipt-verification-r2`. Cite a tag rather than a branch if you need a fixed reference.
+
+**Start with `receipt-verification/verifier/VERDICTS.md`** — one row per verdict case, the input
+that produces it, and the order the checks run in. It is the single source the verifiers and their
+cross-check are held to.
+
 ## What is not here
 
 The **system under test** (the Trinity control plane) and the **held red-team corpora** for the
