@@ -122,3 +122,29 @@ taken from:
 
 > **Nathan Howard** (Third Level IT / thirdlevel.ai)
 > **VIRP verifier, v0.1.0** — <https://github.com/nhowardtli/virp/releases/tag/v0.1.0-verifier>
+
+## r4 — every failure names its typed code (appended 2026-09-14)
+
+Since r4, `verify_receipt.exs` prints one extra final line on every failure, `verdict_code: <code>`
+— one of the thirteen typed codes the reference verifier's denial taxonomy assigns to trust and
+signature failures. **The exit codes and every message byte before that line are unchanged**;
+`VERDICTS.md` (the `verdict_code` section) governs the mapping, and the r3 corpus replays with
+identical exits and identical bytes plus that line (21 of 21 entries, measured at preparation).
+
+**Correction, appended 2026-09-18.** Thirteen was two short: the two exit-1 sites for a
+`receipt_hash` that does not match its signed bytes and a signature that does not check out
+carried no code until now. They name `receipt_hash_mismatch` and `signature_invalid`; the
+taxonomy holds fifteen. See `VERDICTS.md`, the `verdict_code` section's correction.
+`verify_receipt.py` does not print it yet — a stated parity gap, not a divergence in verdicts.
+
+## The Python names the code too, and the parity is three-way (appended 2026-09-20)
+
+`verify_receipt.py` now ends every exit-1 and exit-5 message with the same `verdict_code` line,
+on stderr with the message; the parity gap the correction above stated is closed, and the
+cross-check compares the code on every row across the Elixir verifier, the Python verifier and
+the issuing tree's own verdict. Three rows were added to hold what the exit-only cross-check
+could not see (`V-KEY-MALFORMED`, `V-NO-ENTRIES`, `V-NULL-ENTRIES`), one message line moved
+(`V-TRUNCATED` is `signature_malformed`, the taxonomy's word), and one case's exit moved from an
+accidental `1` to `5` (a registry key that is not 32 bytes: `key_public_key_malformed`, the
+sixteenth code). `VERDICTS.md`'s parity paragraph records the measurement and the ruling; the
+verifier-primitive rule is stated in the Python's header.

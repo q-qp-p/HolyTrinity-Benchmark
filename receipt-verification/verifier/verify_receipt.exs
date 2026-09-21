@@ -36,6 +36,11 @@ defmodule VerifyReceipt do
   @exit_no_trust 5
   @exit_compromised 6
 
+  # W2 (2026-09-12): every failure names its typed code on its last line, `verdict_code: <code>`,
+  # one of the thirteen members of AutonomousAgency.Authority.DenialTaxonomy with class :trust or
+  # :signature. The exit codes above are unchanged; VERDICTS.md still governs them. The message
+  # bytes before that line are unchanged.
+
   @statuses ~w(example active retired compromised)
   @envelope ~w(signature key_id signed_payload receipt_hash)
   @ignored ~w(public_key _note)
@@ -97,9 +102,12 @@ defmodule VerifyReceipt do
     # ORDER IS VERDICTS.md's. Every trust question precedes every accusation, because an
     # accusation requires standing.
     entry = trusted_entry(registry, key_id)
+    # the entry's window BEFORE the receipt's instant (VERDICTS.md step 2's order; the Python
+    # verifier's and the tree's -- the fix review of REQ-109, F2: this file asked occurred_at
+    # first and named a different code when both were unreadable)
+    {valid_from, valid_to} = window(entry, key_id)
     signed = signed_object(payload)
     occurred = occurred_at(signed)
-    {valid_from, valid_to} = window(entry, key_id)
 
     check_hash(receipt, payload)
     check_siblings(receipt, signed)
@@ -125,7 +133,16 @@ defmodule VerifyReceipt do
   end
 
   defp trusted_entry(registry, key_id) do
-    entries = Enum.filter(registry["entries"] || [], &(is_map(&1) and &1["key_id"] == key_id))
+    # REQ-109 (2026-09-20, G-253): `entries` absent, null (`:json` renders it as the atom :null)
+    # or not a list is a registry that gives no basis -- the same trust question as an absent
+    # key, named by the same code. Before this the verifier crashed on null (exit 1 by accident).
+    entries =
+      case registry["entries"] do
+        list when is_list(list) -> list
+        _absent_null_or_other -> []
+      end
+
+    entries = Enum.filter(entries, &(is_map(&1) and &1["key_id"] == key_id))
 
     case entries do
       [] ->
@@ -134,6 +151,8 @@ defmodule VerifyReceipt do
 
         This is not a statement that the receipt is bad. It is a statement that the registry you
         supplied gives no basis to judge it. The verifier does not fall back to any other key.
+
+        verdict_code: registry_missing_key
         """)
 
       # V-DUPKEY. Taking the first would let DOCUMENT ORDER select the verdict, inside a file whose
@@ -148,11 +167,14 @@ defmodule VerifyReceipt do
 
         Detected on key_id only. Two entries sharing a public key under DIFFERENT key_ids is not
         this error.
+
+        verdict_code: registry_duplicate_key
         """)
 
       [only] ->
         check_status(only, key_id)
         check_fingerprint(only, key_id)
+        check_key_length(only, key_id)
         only
     end
   end
@@ -169,6 +191,8 @@ defmodule VerifyReceipt do
 
         Example entries exist to demonstrate the registry's schema. They are generated from a
         published string, so their private half is not secret and anything they sign proves nothing.
+
+        verdict_code: key_is_example
         """)
 
       is_binary(status) and status in @statuses ->
@@ -181,6 +205,8 @@ defmodule VerifyReceipt do
         The registry defines exactly four: example, active, retired, compromised. A status outside
         that set, or absent, is standing this verifier cannot interpret. It refuses rather than
         treating the unrecognised as the benign.
+
+        verdict_code: key_status_not_active
         """)
     end
   end
@@ -203,7 +229,27 @@ defmodule VerifyReceipt do
         public_key_fingerprint is sha256 over the RAW key bytes, lowercase hex. This entry fails its
         own integrity check, so nothing it states — its status, its window, its key — can be relied
         on.
+
+        verdict_code: key_fingerprint_mismatch
         """)
+    end
+  end
+
+  # REQ-109 (2026-09-20, G-255): a public_key that is not 32 raw bytes is not an Ed25519 key.
+  # A defect in the TRUST ROOT is a trust question (exit 5), never an accusation of the receipt:
+  # before this the check fell to `:crypto.verify/5`'s raise and exited 1 by accident.
+  defp check_key_length(entry, key_id) do
+    {:ok, raw} = decode64(entry["public_key"])
+
+    if byte_size(raw) != 32 do
+      fail(@exit_no_trust, """
+      TRUST NOT ESTABLISHED — key_id #{inspect(key_id)} publishes a public_key of #{byte_size(raw)} bytes; an Ed25519 public key is 32.
+
+      The entry hashes to its own fingerprint, so this is what the registry published: not a key
+      this verifier can check a signature against. Nothing the receipt says is judged.
+
+      verdict_code: key_public_key_malformed
+      """)
     end
   end
 
@@ -217,6 +263,8 @@ defmodule VerifyReceipt do
 
       Accepted form is YYYY-MM-DDTHH:MM:SSZ exactly. A window that cannot be read cannot place a
       receipt inside or outside it.
+
+      verdict_code: key_valid_from_unusable
       """)
     end
 
@@ -232,6 +280,8 @@ defmodule VerifyReceipt do
             TRUST NOT ESTABLISHED — key_id #{inspect(key_id)} has an unreadable valid_to.
 
             Accepted form is YYYY-MM-DDTHH:MM:SSZ exactly, or null for a key still signing.
+
+            verdict_code: key_valid_to_unreadable
             """)
 
           value ->
@@ -263,6 +313,8 @@ defmodule VerifyReceipt do
       occurred_at is the only signing time a receipt carries, and it is what the key's signing
       window is checked against. Accepted form is YYYY-MM-DDTHH:MM:SSZ exactly; it is refused
       rather than coerced, so the two implementations cannot drift.
+
+      verdict_code: signed_occurred_at_unreadable
       """)
     end
 
@@ -286,7 +338,7 @@ defmodule VerifyReceipt do
         if actual != hash do
           fail(
             @exit_invalid,
-            "SIGNATURE INVALID — the receipt's own receipt_hash does not match its signed bytes."
+            "SIGNATURE INVALID — the receipt's own receipt_hash does not match its signed bytes.\n\nverdict_code: receipt_hash_mismatch"
           )
         end
 
@@ -296,6 +348,8 @@ defmodule VerifyReceipt do
 
         A receipt states the digest of its own signed bytes. An absent field is not a check to be
         skipped; it is a receipt that declines to be held to anything.
+
+        verdict_code: receipt_hash_missing
         """)
     end
   end
@@ -316,6 +370,8 @@ defmodule VerifyReceipt do
           A reader takes the visible field for part of the receipt. The signature covers only the
           signed bytes, so a top-level field contradicting them is a claim no signature stands
           behind.
+
+          verdict_code: displayed_field_mismatch
           """)
       end
     end)
@@ -338,21 +394,34 @@ defmodule VerifyReceipt do
 
   defp tagged(value), do: {:other, inspect(value)}
 
+  # REQ-109 (2026-09-20, G-255): a signature that does not decode or is not 64 raw bytes is
+  # MALFORMED (the taxonomy's own word; the tree's `signature_checks/3` agrees) -- before this
+  # `:crypto.verify/5` returned false on 63 bytes and the verdict said `signature_invalid`. The
+  # key's length is checked at the trust step (`check_key_length/2`), so the rescue below is a
+  # belt for material this verifier did not foresee, never the path for a known shape.
   defp check_signature(payload, signature, entry) do
-    with {:ok, raw_signature} <- decode64(signature),
-         {:ok, raw_key} <- decode64(entry["public_key"]),
-         true <- :crypto.verify(:eddsa, :none, payload, raw_signature, [raw_key, :ed25519]) do
+    raw_signature =
+      case decode64(signature) do
+        {:ok, raw} when byte_size(raw) == 64 -> raw
+        _otherwise -> malformed_signature()
+      end
+
+    {:ok, raw_key} = decode64(entry["public_key"])
+
+    if :crypto.verify(:eddsa, :none, payload, raw_signature, [raw_key, :ed25519]) do
       raw_key
     else
-      _otherwise ->
-        fail(
-          @exit_invalid,
-          "SIGNATURE INVALID — the signature does not check out against the registry's public key."
-        )
+      fail(
+        @exit_invalid,
+        "SIGNATURE INVALID — the signature does not check out against the registry's public key.\n\nverdict_code: signature_invalid"
+      )
     end
   rescue
-    ErlangError ->
-      fail(@exit_invalid, "SIGNATURE INVALID — malformed signature or key material.")
+    ErlangError -> malformed_signature()
+  end
+
+  defp malformed_signature do
+    fail(@exit_invalid, "SIGNATURE INVALID — malformed signature or key material.\n\nverdict_code: signature_malformed")
   end
 
   # Half-open: valid_from <= occurred_at < valid_to. VERDICTS.md records why the published
@@ -371,6 +440,8 @@ defmodule VerifyReceipt do
 
       Sound for honest history, advisory against a forger: occurred_at is asserted by the receipt,
       and an adversary holding the key can backdate it.
+
+      verdict_code: signed_outside_key_validity
       """)
     end
   end
@@ -450,6 +521,8 @@ defmodule VerifyReceipt do
     exists you will be able to cross-check one against the other, and disagreement between them
     will itself be an alarm. Until then there is one channel, and this tool says so rather than
     implying a check you cannot perform.
+
+    verdict_code: registry_not_supplied
     """)
 
     System.halt(@exit_no_trust)

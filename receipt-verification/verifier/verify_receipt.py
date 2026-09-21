@@ -32,6 +32,19 @@ would break the no-installs property this file exists to provide. It is a NAMED 
 rule against second implementations, and the exception is bounded by the cross-check corpus: this
 file and verify_receipt.exs must agree on every case, including known-bad signatures, wrong keys
 and truncated input. Verification only — this file never signs anything.
+
+THE RULE THIS FILE BOUNDS — the verifier-primitive rule (G-212, stated 2026-09-20). Nothing a
+stranger is asked to check may
+require a primitive this file cannot compute from the standard library: SHA-2/SHA-3/SHAKE, the
+hand-written Ed25519 above, hash-based signatures. ML-DSA, BLS, pairing-based proofs, X.509 and
+ECDSA are OUT — a construction that "gives the verifier X" adds a verification domain to a file
+whose one stated exception is Ed25519. The import list below is the whole of what this file may
+reach, and the cross-check test pins it exactly.
+
+VERDICT CODES (2026-09-20, REQ-109; G-052 lifted). Every exit-1 and exit-5 message ends with a
+line `verdict_code: <code>`, the same code verify_receipt.exs and the issuing tree name for that
+input, written to STDERR with the message. The cross-check test compares the codes, not only the
+exits, on every corpus row. Exit 0, 2 and 6 carry no code.
 """
 
 import base64
@@ -130,8 +143,14 @@ IGNORED = ("public_key", "_note")
 TS = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 
 
-def die(code, message, stream=sys.stderr):
+def die(code, message, stream=sys.stderr, verdict_code=None):
+    # stdout first: the public_key note is block-buffered on a pipe and would otherwise land
+    # AFTER the verdict when a caller merges the streams (REQ-109, the reds review's M7)
+    sys.stdout.flush()
+    if verdict_code is not None:
+        message = message + "\n\nverdict_code: " + verdict_code
     print(message, file=stream)
+    stream.flush()
     sys.exit(code)
 
 
@@ -211,6 +230,7 @@ def main(argv):
             "When it exists you will be able to cross-check one against the other, and\n"
             "disagreement between them will itself be an alarm. Until then there is one channel,\n"
             "and this tool says so rather than implying a check you cannot perform.",
+            verdict_code="registry_not_supplied",
         )
 
     try:
@@ -238,7 +258,11 @@ def main(argv):
 
     entries = registry.get("entries")
     if not isinstance(entries, list):
-        die(EXIT_NO_TRUST, "TRUST NOT ESTABLISHED — the registry carries no entries list.")
+        die(
+            EXIT_NO_TRUST,
+            "TRUST NOT ESTABLISHED — the registry carries no entries list.",
+            verdict_code="registry_missing_key",
+        )
 
     matches = [e for e in entries if isinstance(e, dict) and e.get("key_id") == key_id]
 
@@ -249,6 +273,7 @@ def main(argv):
             "This is not a statement that the receipt is bad. It is a statement that the registry\n"
             "you supplied gives no basis to judge it. The verifier does not fall back to any other\n"
             "key." % key_id,
+            verdict_code="registry_missing_key",
         )
 
     # V-DUPKEY. Taking the first match would let DOCUMENT ORDER select the verdict, inside a file
@@ -262,6 +287,7 @@ def main(argv):
             "picking either one would let the ORDER of a document decide the verdict.\n"
             "Detected on key_id only. Two entries sharing a public key under DIFFERENT key_ids is\n"
             "not this error." % (key_id, len(matches)),
+            verdict_code="registry_duplicate_key",
         )
 
     entry = matches[0]
@@ -276,6 +302,7 @@ def main(argv):
             "The registry defines exactly four: example, active, retired, compromised. A status\n"
             "outside that set, or absent, is standing this verifier cannot interpret. It refuses\n"
             "rather than treating the unrecognised as the benign." % (key_id, status),
+            verdict_code="key_status_not_active",
         )
 
     if status == "example":
@@ -285,12 +312,17 @@ def main(argv):
             "Example entries demonstrate the registry's schema. They are generated from a published\n"
             "string, so their private half is not secret and anything they sign proves nothing."
             % key_id,
+            verdict_code="key_is_example",
         )
 
     # The entry must hash to its own published fingerprint BEFORE anything it says is believed,
     # including its status and its window. An entry failing its own integrity check may have been
     # substituted, and reporting a benign story read out of it would be the wrong answer.
-    raw_key = b64(entry.get("public_key") or "")
+    # an absent or non-string public_key is a fingerprint failure (the Elixir verifier's and the
+    # tree's order; the fix review's F2: `or ""` hashed to sha256("") and reached the key-length
+    # site instead)
+    published = entry.get("public_key")
+    raw_key = b64(published) if isinstance(published, str) else None
     stated = entry.get("public_key_fingerprint")
     if raw_key is None or not isinstance(stated, str) or hashlib.sha256(raw_key).hexdigest() != stated:
         die(
@@ -299,6 +331,21 @@ def main(argv):
             "public_key_fingerprint is sha256 over the RAW key bytes, lowercase hex. This entry\n"
             "fails its own integrity check, so nothing it states — its status, its window, its key —\n"
             "can be relied on." % key_id,
+            verdict_code="key_fingerprint_mismatch",
+        )
+
+    # REQ-109 (G-255): a public_key that is not 32 raw bytes is not an Ed25519 key. A defect in
+    # the TRUST ROOT is a trust question, never an accusation of the receipt. The entry hashed
+    # to its own fingerprint, so this is what the registry published.
+    if len(raw_key) != 32:
+        die(
+            EXIT_NO_TRUST,
+            "TRUST NOT ESTABLISHED — key_id %r publishes a public_key of %d bytes; an Ed25519\n"
+            "public key is 32.\n\n"
+            "The entry hashes to its own fingerprint, so this is what the registry published: not\n"
+            "a key this verifier can check a signature against. Nothing the receipt says is judged."
+            % (key_id, len(raw_key)),
+            verdict_code="key_public_key_malformed",
         )
 
     valid_from, valid_to = timestamp(entry.get("valid_from")), entry.get("valid_to")
@@ -308,6 +355,7 @@ def main(argv):
             "TRUST NOT ESTABLISHED — key_id %r has no usable valid_from.\n\n"
             "Accepted form is YYYY-MM-DDTHH:MM:SSZ exactly. A window that cannot be read cannot\n"
             "place a receipt inside or outside it." % key_id,
+            verdict_code="key_valid_from_unusable",
         )
     if valid_to is not None:
         valid_to = timestamp(valid_to)
@@ -317,7 +365,8 @@ def main(argv):
                 "TRUST NOT ESTABLISHED — key_id %r has an unreadable valid_to.\n\n"
                 "Accepted form is YYYY-MM-DDTHH:MM:SSZ exactly, or null for a key still signing."
                 % key_id,
-            )
+            verdict_code="key_valid_to_unreadable",
+        )
 
     try:
         signed = json.loads(payload)
@@ -334,6 +383,7 @@ def main(argv):
             "occurred_at is the only signing time a receipt carries, and it is what the key's\n"
             "signing window is checked against. Accepted form is YYYY-MM-DDTHH:MM:SSZ exactly;\n"
             "it is refused rather than coerced, so the two implementations cannot drift.",
+            verdict_code="signed_occurred_at_unreadable",
         )
 
     # --- the receipt itself. Everything below accuses the receipt, so it runs only once the
@@ -345,11 +395,13 @@ def main(argv):
             "SIGNATURE INVALID — the receipt carries no receipt_hash.\n\n"
             "A receipt states the digest of its own signed bytes. An absent field is not a check\n"
             "to be skipped; it is a receipt that declines to be held to anything.",
+            verdict_code="receipt_hash_missing",
         )
     if hashlib.sha256(payload.encode("utf-8")).hexdigest() != expected_hash:
         die(
             EXIT_INVALID,
             "SIGNATURE INVALID — the receipt's own receipt_hash does not match its signed bytes.",
+            verdict_code="receipt_hash_mismatch",
         )
 
     for key in receipt:
@@ -362,15 +414,24 @@ def main(argv):
                 "A reader takes the visible field for part of the receipt. The signature covers\n"
                 "only the signed bytes, so a top-level field contradicting them is a claim no\n"
                 "signature stands behind." % (key, receipt[key], signed[key]),
-            )
+            verdict_code="displayed_field_mismatch",
+        )
 
+    # REQ-109 (G-255): a signature that does not decode or is not 64 raw bytes is MALFORMED --
+    # the taxonomy's word, the Elixir verifier's and the issuing tree's; one that decodes and
+    # fails the curve check is INVALID.
     raw_signature = b64(signature)
-    if raw_signature is None or not ed25519_verify(
-        raw_signature, payload.encode("utf-8"), raw_key
-    ):
+    if raw_signature is None or len(raw_signature) != 64:
+        die(
+            EXIT_INVALID,
+            "SIGNATURE INVALID — malformed signature or key material.",
+            verdict_code="signature_malformed",
+        )
+    if not ed25519_verify(raw_signature, payload.encode("utf-8"), raw_key):
         die(
             EXIT_INVALID,
             "SIGNATURE INVALID — the signature does not check out against the registry's public key.",
+            verdict_code="signature_invalid",
         )
 
     # 6 asserts the signature IS cryptographically valid, so it cannot be reached over a failed
@@ -412,6 +473,7 @@ def main(argv):
                 entry.get("valid_from"),
                 entry.get("valid_to"),
             ),
+            verdict_code="signed_outside_key_validity",
         )
 
     print(
